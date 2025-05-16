@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CubeDraw Image Capturing</title>
+    <script async src="opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+        .canvas-container {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .canvas-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        canvas {
+            border: 1px solid black;
+        }
+    </style>
+</head>
+<body>
+    <h1>CubeDraw Image Capturing</h1>
+    <input type="file" id="fileInput" accept="image/*">
+    <select id="sampleImages">
+        <option value="">Select a Sample Image</option>
+        <option value="./images/Back.png">Back.png</option>
+        <option value="./images/Down.png">Down.png</option>
+        <option value="./images/Front.png">Front.png</option>
+        <option value="./images/Left.png">Left.png</option>
+        <option value="./images/Right.png">Right.png</option>
+        <option value="./images/Up.png">Up.png</option>
+    </select>
+    <button id="loadSample">Load Sample Image</button>
+
+    <div class="canvas-container">
+        <div class="canvas-wrapper">
+            <h3>Original Image</h3>
+            <canvas id="originalCanvas"></canvas>
+        </div>
+        <div class="canvas-wrapper">
+            <h3>Grayscale</h3>
+            <canvas id="grayCanvas"></canvas>
+        </div>
+        <div class="canvas-wrapper">
+            <h3>Blurred</h3>
+            <canvas id="blurredCanvas"></canvas>
+        </div>
+        <div class="canvas-wrapper">
+            <h3>Edge Detection</h3>
+            <canvas id="edgeCanvas"></canvas>
+        </div>
+        <div class="canvas-wrapper">
+            <h3>Enhanced Edge Detection</h3>
+            <canvas id="closedEdgesCanvas"></canvas>
+        </div>
+        <div class="canvas-wrapper">
+            <h3>Best Contour Detected</h3>
+            <canvas id="BestDetectedSheetContour"></canvas>
+        </div>
+        <div class="canvas-wrapper">
+            <h3>Image Captured</h3>
+            <canvas id="FinalImage"></canvas>
+        </div>
+    </div>
+    <button id="downloadButton" style="margin-top: 20px;">Save and Download Image</button>
+
+
+    <script>
+        function onOpenCvReady() {
+            console.log("OpenCV.js is ready.");
+        }
+
+        document.getElementById('loadSample').addEventListener('click', function () {
+            let selectedImage = document.getElementById('sampleImages').value;
+            if (selectedImage) {
+                processImageFromPath(selectedImage);
+            } else {
+                alert("Please select a sample image.");
+            }
+        });
+
+        function processImageFromPath(imagePath) {
+            let imgElement = new Image();
+            imgElement.src = imagePath;
+            imgElement.crossOrigin = "Anonymous"; // In case of CORS issues
+            imgElement.onload = function () {
+                let canvas = document.createElement('canvas');
+                let ctx = canvas.getContext('2d');
+                canvas.width = imgElement.width;
+                canvas.height = imgElement.height;
+                ctx.drawImage(imgElement, 0, 0, imgElement.width, imgElement.height);
+
+                let imgMat = cv.imread(canvas);
+                let edges = preprocessImage(imgMat);
+                let best_contour = findContours(edges, imgMat);
+
+                if (best_contour && best_contour.length === 4) {
+                    let transformedImage = applyPerspectiveTransform(imgMat, best_contour);
+                    finalImageMat = transformedImage.clone();
+                } else {
+                    console.error("Failed to find a valid contour.");
+                }
+
+                imgMat.delete();
+            };
+        }
+
+        document.getElementById('fileInput').addEventListener('change', function(event) {
+            let file = event.target.files[0];
+            if (file) {
+                let imgElement = new Image();
+                imgElement.src = URL.createObjectURL(file);
+                imgElement.onload = function () {
+                    let canvas = document.createElement('canvas');
+                    let ctx = canvas.getContext('2d');
+                    canvas.width = imgElement.width;
+                    canvas.height = imgElement.height;
+                    ctx.drawImage(imgElement, 0, 0, imgElement.width, imgElement.height);
+
+                    // Convert canvas image to cv.Mat
+                    let imgMat = cv.imread(canvas);
+
+                    // Process image
+                    let edges = preprocessImage(imgMat); 
+                    let best_contour = findContours(edges, imgMat);
+
+                    if (best_contour && best_contour.length === 4) {
+                        // Apply perspective transformation
+                        let transformedImage = applyPerspectiveTransform(imgMat, best_contour);
+                        finalImageMat = transformedImage.clone();
+
+                        // Display the transformed image in an existing or new canvas
+                        //cv.imshow('canvasOutput', transformedImage);
+
+                        // Clean up memory
+                        //transformedImage.delete();
+                    } else {
+                        console.error("Failed to find a valid contour.");
+                    }
+
+                    // Clean up
+                    imgMat.delete();
+                };
+            }
+        });
+
+        function preprocessImage(imgMat) {
+            //let mat = cv.imread(imgElement);
+
+            // Display original image
+            displayImage(imgMat, "originalCanvas");
+
+            // Convert to grayscale
+            let gray = new cv.Mat();
+            cv.cvtColor(imgMat, gray, cv.COLOR_RGBA2GRAY);
+            displayImage(gray, "grayCanvas");
+
+            // Apply Gaussian blur
+            let blurred = new cv.Mat();
+            let ksize = new cv.Size(5, 5);
+            cv.GaussianBlur(gray, blurred, ksize, 0, 0);
+            displayImage(blurred, "blurredCanvas");
+
+            // Edge detection using Canny
+            let edges = new cv.Mat();
+            cv.Canny(blurred, edges, 100, 200);
+            displayImage(edges, "edgeCanvas");
+
+            // Close gaps in contours using dilation and erosion
+            let closedEdges = new cv.Mat();
+            let kernel = cv.Mat.ones(5, 5, cv.CV_8U);
+            cv.dilate(edges, closedEdges, kernel, new cv.Point(-1, -1), 1);
+            cv.erode(closedEdges, closedEdges, kernel, new cv.Point(-1, -1), 1);
+            displayImage(closedEdges, "closedEdgesCanvas");
+            
+            return closedEdges
+
+            // Clean up memory
+            //mat.delete();
+            gray.delete();
+            blurred.delete();
+            edges.delete();
+            closedEdges.delete();
+            kernel.delete();
+
+        }
+
+        function orderPoints(points) {
+            // Orders 4 points into [top-left, top-right, bottom-right, bottom-left]
+            if (points.length !== 4) {
+                console.error("Error: orderPoints received an invalid number of points:", points);
+                return null;
+            }
+
+            // Compute sums and differences
+            let sums = points.map(([x, y]) => x + y);
+            let diffs = points.map(([x, y]) => x - y);
+
+            let ordered = new Array(4);
+            ordered[0] = points[sums.indexOf(Math.min(...sums))]; // Top-left
+            ordered[2] = points[sums.indexOf(Math.max(...sums))]; // Bottom-right
+            ordered[1] = points[diffs.indexOf(Math.max(...diffs))]; // Top-right
+            ordered[3] = points[diffs.indexOf(Math.min(...diffs))]; // Bottom-left
+
+            return ordered;
+        }
+
+        function findFarthestPoints(approx) {
+            console.log("Received Points:", approx);
+            console.log("First Point:", approx[0]);
+
+            // Convert flat Int32Array to an array of [x, y] pairs
+            let points = [];
+            for (let i = 0; i < approx.length; i += 2) {
+                points.push([approx[i], approx[i + 1]]);
+            }
+
+            console.log("Converted Points:", points);
+
+            if (points.length < 4) {
+                console.error("Error: Not enough points", points);
+                return null;
+            }
+
+            let selectedPoints = [points[0]];
+            let remainingPoints = points.slice(1);
+
+            for (let i = 0; i < 3; i++) {
+                let maxDist = 0;
+                let farthestPoint = null;
+
+                for (let point of remainingPoints) {
+                    let minDist = Math.min(...selectedPoints.map(sp => Math.hypot(point[0] - sp[0], point[1] - sp[1])));
+                    if (minDist > maxDist) {
+                        maxDist = minDist;
+                        farthestPoint = point;
+                    }
+                }
+
+                selectedPoints.push(farthestPoint);
+                remainingPoints = remainingPoints.filter(point => !point.every((val, idx) => val === farthestPoint[idx]));
+            }
+
+            return orderPoints(selectedPoints);
+        }
+
+
+        function calculateQuadrilateralArea(points) {
+            // Calculate area of a quadrilateral given four corner points using the Shoelace theorem
+            if (!points || points.length !== 4) {
+                console.error("Error: Invalid points for area calculation:", points);
+                return 0;
+            }
+
+            let x = points.map(point => point[0]);
+            let y = points.map(point => point[1]);
+            let area = 0.5 * Math.abs(
+                x[0] * y[1] + x[1] * y[2] + x[2] * y[3] + x[3] * y[0] - 
+                (y[0] * x[1] + y[1] * x[2] + y[2] * x[3] + y[3] * x[0])
+            );
+            return area;
+        }
+
+        function findContours(edges, img, minContourLength = 2000) {
+            let contours = new cv.MatVector();
+            let hierarchy = new cv.Mat();
+            cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+            let filteredContours = [];
+
+            for (let i = 0; i < contours.size(); i++) {
+                let contour = contours.get(i);
+                if (cv.arcLength(contour, true) >= minContourLength) {
+                    filteredContours.push(contour);
+                }
+            }
+
+            // Sort contours by perimeter
+            filteredContours.sort((a, b) => cv.arcLength(b, true) - cv.arcLength(a, true));
+
+            let contoursTop5 = filteredContours.slice(0, 5);
+            let largestArea = 0;
+            let bestFarthestPoints = null;
+
+            for (let i = 0; i < contoursTop5.length; i++) {
+                let contour = contoursTop5[i];
+
+                let perimeter = cv.arcLength(contour, true);
+                let approx = new cv.Mat();
+                cv.approxPolyDP(contour, approx, 0.01 * perimeter, true);
+
+                // Reshape approx.data32S into an array of [x, y] points
+                let points = [];
+                for (let j = 0; j < approx.data32S.length; j += 2) {
+                    points.push([approx.data32S[j], approx.data32S[j + 1]]);
+                }
+
+                console.log("Approximated Points:", points);
+
+
+                let farthestPoints = findFarthestPoints(approx.data32S);
+
+                if (!farthestPoints || farthestPoints.length !== 4) {
+                    console.log(`Skipping contour ${i + 1}: Invalid farthest points`);
+                    approx.delete();
+                    continue;
+                }
+
+                let area = calculateQuadrilateralArea(farthestPoints);
+                console.log(`Area ${i + 1}: ${area}`);
+
+                if (area > largestArea) {
+                    largestArea = area;
+                    bestFarthestPoints = farthestPoints;
+                }
+
+                approx.delete();
+            }
+
+            if (bestFarthestPoints) {
+                let imgPaper = img.clone();
+                if (imgPaper.channels() === 4) {
+                    cv.cvtColor(imgPaper, imgPaper, cv.COLOR_RGBA2RGB);
+                }
+                let bestContour = cv.matFromArray(bestFarthestPoints.length, 1, cv.CV_32SC2, bestFarthestPoints.flat());
+                let matVectorBest = new cv.MatVector();
+                matVectorBest.push_back(bestContour);
+                cv.drawContours(imgPaper, matVectorBest, -1, new cv.Scalar(0, 255, 0), 3);
+                displayImage(imgPaper, "BestDetectedSheetContour");
+
+                matVectorBest.delete();
+                bestContour.delete();
+            }
+
+            // Clean up memory
+            contours.delete();
+            hierarchy.delete();
+            filteredContours.forEach(contour => contour.delete());
+
+            return bestFarthestPoints;
+        }
+
+        function applyPerspectiveTransform(img, points) {
+            if (points.length !== 4) {
+                console.error("The input points must be an array of four [x, y] pairs.");
+                return null;
+            }
+
+            let srcMat = cv.matFromArray(4, 1, cv.CV_32FC2, points.flat()); // Convert to OpenCV matrix
+            let width = Math.max(
+                Math.hypot(points[2][0] - points[3][0], points[2][1] - points[3][1]),
+                Math.hypot(points[1][0] - points[0][0], points[1][1] - points[0][1])
+            );
+            let height = Math.max(
+                Math.hypot(points[1][0] - points[2][0], points[1][1] - points[2][1]),
+                Math.hypot(points[0][0] - points[3][0], points[0][1] - points[3][1])
+            );
+
+            let dstMat = cv.matFromArray(4, 1, cv.CV_32FC2, [
+                0, 0,
+                width - 1, 0,
+                width - 1, height - 1,
+                0, height - 1
+            ]);
+
+            let M = cv.getPerspectiveTransform(srcMat, dstMat);
+            let dst = new cv.Mat();
+            cv.warpPerspective(img, dst, M, new cv.Size(width, height));
+
+            displayImage(dst, 'FinalImage'); // Display the output on a canvas
+            srcMat.delete(); dstMat.delete(); M.delete();
+            return dst;
+        }
+
+        /*
+        function displayImage(mat, canvasId) {
+            let canvas = document.getElementById(canvasId);
+            cv.imshow(canvas, mat);
+        }
+        */
+
+        function displayImage(mat, canvasId, maxWidth = 300) {
+            let canvas = document.getElementById(canvasId);
+            let ctx = canvas.getContext('2d');
+
+            // Calculate the new height while maintaining the aspect ratio
+            let aspectRatio = mat.cols / mat.rows;
+            let newWidth = maxWidth;
+            let newHeight = Math.round(maxWidth / aspectRatio);
+
+            // Resize the canvas to match the new dimensions
+            canvas.width = newWidth;
+            canvas.height = newHeight;
+
+            // Resize the image
+            let resizedMat = new cv.Mat();
+            let newSize = new cv.Size(newWidth, newHeight);
+            cv.resize(mat, resizedMat, newSize);
+
+            // Display the resized image on the canvas
+            cv.imshow(canvas, resizedMat);
+
+            // Clean up memory
+            resizedMat.delete();
+        }
+
+        // Save and download button event listener
+        document.getElementById('downloadButton').addEventListener('click', function() {
+            if (finalImageMat) {
+                // Resize the final cropped image to 2400x2400
+                let resizedImage = new cv.Mat();
+                let newSize = new cv.Size(2400, 2400);
+                cv.resize(finalImageMat, resizedImage, newSize);
+
+                // Convert the resized image to a PNG and download it
+                let resizedCanvas = document.createElement('canvas');
+                cv.imshow(resizedCanvas, resizedImage); // Draw the resized image on a temporary canvas
+                let dataURL = resizedCanvas.toDataURL('image/png'); // Convert the canvas to a PNG data URL
+
+                // Create a temporary download link
+                let link = document.createElement('a');
+                link.href = dataURL;
+                link.download = 'resized_image.png';
+
+                // Trigger the download
+                link.click();
+
+                // Clean up
+                resizedImage.delete();
+            } else {
+                alert("No image has been processed yet.");
+            }
+        });
+    </script>
+</body>
+</html>
